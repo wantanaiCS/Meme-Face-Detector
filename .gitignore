@@ -28,6 +28,7 @@ desktop.ini
 *.avi
 screenshots/
 recordings/
+models/*.task
 
 # Environment
 .env
