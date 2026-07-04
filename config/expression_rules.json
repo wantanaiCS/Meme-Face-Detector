@@ -1,0 +1,26 @@
+{
+  "surprised": {
+    "description": "ปากเปิดกว้าง + คิ้วยกสูง",
+    "mouth_open_threshold": 25,
+    "brow_raise_threshold": 15
+  },
+  "happy": {
+    "description": "ยิ้ม — มุมปากยกขึ้น + ปากเปิดเล็กน้อย",
+    "mouth_corner_raise_min": 0.015,
+    "mouth_open_min": 5,
+    "mouth_open_max": 20
+  },
+  "angry": {
+    "description": "โกรธ — คิ้วขมวดลง + ริมฝีปากแน่น",
+    "brow_furrow_threshold": 0.015,
+    "mouth_open_max": 8
+  },
+  "sleepy": {
+    "description": "ง่วง/เบื่อ — ตาหลับเกือบสนิท",
+    "eye_open_max": 5
+  },
+  "thinking": {
+    "description": "คิด/สงสัย — เอียงหัวหรือมุมปากข้างหนึ่งยก",
+    "head_tilt_min": 5
+  }
+}
