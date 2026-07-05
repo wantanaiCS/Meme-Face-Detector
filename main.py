@@ -59,9 +59,27 @@ def draw_hud(
     h, w = frame.shape[:2]
     state = gesture if gesture else expression
     emoji_map = {
-        "surprised": "😮", "happy": "😄", "angry": "😠",
-        "sleepy": "😴", "thinking": "🤔", "neutral": "😐",
-        "thumbs_up": "👍", "peace": "✌️", "pointing": "☝️", "fist": "✊",
+        # face expressions
+        "laughing":      "🤣",
+        "wink":          "😉",
+        "derp":          "😛",
+        "rage":          "🤬",
+        "sigma":         "😏",
+        "confused":      "😕",
+        "sad":           "😢",
+        "surprised":     "😮",
+        "happy":         "😄",
+        "angry":         "😠",
+        "sleepy":        "😴",
+        "thinking":      "🤔",
+        "neutral":       "😐",
+        # hand gestures
+        "middle_finger": "🖕",
+        "ok_sign":       "👌",
+        "thumbs_up":     "👍",
+        "peace":         "✌️",
+        "pointing":      "☝️",
+        "fist":          "✊",
     }
     label = f"{emoji_map.get(state, '')} {state.upper()}"
 
@@ -77,19 +95,34 @@ def draw_hud(
         cv2.putText(frame, f"Gesture: {gesture}", (10, h - box_h + 44),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2, cv2.LINE_AA)
 
-    # Debug values
+    # Debug values — แสดงเป็น overlay กล่องใสมุมซ้ายบน (ไม่ชนกับ HUD ล่าง)
     if show_debug and debug_values:
-        items = list(debug_values.items())
-        x = 10
-        y = h - box_h + 68
+        items  = list(debug_values.items())
+        cols   = 3                      # 3 คอลัมน์
+        col_w  = max(w // cols, 200)    # ความกว้างแต่ละคอลัมน์
+        row_h  = 20                     # ความสูงแต่ละแถว
+        rows   = (len(items) + cols - 1) // cols
+        pad    = 8
+        box_h  = rows * row_h + pad * 2
+        box_y  = 45                     # เว้นจาก FPS counter
+
+        # พื้นหลังโปร่งแสง
+        overlay_bg = frame[box_y:box_y + box_h, 0:col_w * cols].copy()
+        cv2.rectangle(frame, (0, box_y), (col_w * cols, box_y + box_h),
+                      (0, 0, 0), cv2.FILLED)
+        cv2.addWeighted(overlay_bg, 0.35,
+                        frame[box_y:box_y + box_h, 0:col_w * cols], 0.65,
+                        0, frame[box_y:box_y + box_h, 0:col_w * cols])
+
         for i, (k, v) in enumerate(items):
-            text = f"{k}: {v}"
-            cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.42, (180, 180, 180), 1, cv2.LINE_AA)
-            x += 180
-            if x > w - 180:
-                x = 10
-                y += 16
+            col = i % cols
+            row = i // cols
+            tx  = col * col_w + pad
+            ty  = box_y + pad + row * row_h + 13
+            # highlight ค่าที่สูง (> 0.15) ด้วยสีเหลือง
+            color = (0, 255, 255) if float(v) > 0.15 else (160, 160, 160)
+            cv2.putText(frame, f"{k}: {v}", (tx, ty),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
 
 
 def draw_controls_hint(frame) -> None:
@@ -165,9 +198,9 @@ def main() -> int:
 
             # 4. เลือก Meme (gesture มี priority สูงกว่า expression)
             active_state = gesture if gesture else expression
-            meme_path    = selector.select_meme(active_state)
+            meme_path    = selector.select_meme(active_state) if active_state != "neutral" else None
 
-            # 5. วาง Meme overlay
+            # 5. วาง Meme overlay (ไม่แสดงเมื่อ neutral)
             if meme_path:
                 overlay.apply(frame, meme_path, position="top_right", size=(260, 260))
 

@@ -1,6 +1,6 @@
 """
 Detector Module - ตรวจจับใบหน้าและมือด้วย MediaPipe Tasks API (0.10.x)
-รับผิดชอบ: Face Landmarker (478 landmarks), Hand Landmarker (21 จุด)
+รับผิดชอบ: Face Landmarker (478 landmarks + 52 blendshapes), Hand Landmarker (21 จุด)
 """
 
 import cv2
@@ -15,10 +15,22 @@ from mediapipe.tasks.python.components.containers.landmark import NormalizedLand
 
 
 class FaceLandmarksResult:
-    """Wrapper ให้ใช้ลักษณะเดียวกับ solutions API เดิม (lm[index].x/y/z)"""
+    """
+    Wrapper รวม landmarks + blendshapes ไว้ด้วยกัน
 
-    def __init__(self, landmarks: list):
-        self.landmark = landmarks  # list[NormalizedLandmark]
+    Attributes:
+        landmark:    list[NormalizedLandmark]  — 478 จุด (x/y/z)
+        blendshapes: dict[str, float]          — 52 ค่า เช่น {"mouthSmileLeft": 0.82}
+                     หรือ {} ถ้าไม่ได้เปิด output_face_blendshapes
+    """
+
+    def __init__(self, landmarks: list, blendshapes: dict = None):
+        self.landmark    = landmarks
+        self.blendshapes = blendshapes or {}  # dict[name, score 0–1]
+
+    def bs(self, name: str, default: float = 0.0) -> float:
+        """อ่านค่า blendshape แบบ safe — คืน default ถ้าไม่มีชื่อนั้น"""
+        return self.blendshapes.get(name, default)
 
 
 class FaceDetector:
@@ -71,7 +83,7 @@ class FaceDetector:
             min_face_detection_confidence=face_detection_confidence,
             min_face_presence_confidence=face_detection_confidence,
             min_tracking_confidence=0.5,
-            output_face_blendshapes=False,
+            output_face_blendshapes=True,   # เปิด blendshapes 52 ค่า
         )
         self._face_landmarker = mp_vision.FaceLandmarker.create_from_options(face_opts)
 
@@ -93,11 +105,11 @@ class FaceDetector:
     # ------------------------------------------------------------------
 
     def detect_faces(self, frame: np.ndarray) -> Optional[FaceLandmarksResult]:
-        """ตรวจจับ Face landmarks จาก BGR frame"""
+        """ตรวจจับ Face landmarks + blendshapes จาก BGR frame"""
         mp_image = self._to_mp_image(frame)
         result = self._face_landmarker.detect(mp_image)
         if result.face_landmarks:
-            lm = self._wrap_landmarks(result.face_landmarks[0])
+            lm = self._wrap_face_result(result, 0)
             if self.draw_landmarks:
                 self._draw_face_landmarks(frame, result.face_landmarks[0])
             return lm
@@ -108,7 +120,7 @@ class FaceDetector:
         mp_image = self._to_mp_image(frame)
         result = self._hand_landmarker.detect(mp_image)
         if result.hand_landmarks:
-            lm = self._wrap_landmarks(result.hand_landmarks[0])
+            lm = FaceLandmarksResult(result.hand_landmarks[0])
             if self.draw_landmarks:
                 self._draw_hand_landmarks(frame, result.hand_landmarks[0])
             return lm
@@ -117,7 +129,12 @@ class FaceDetector:
     def detect_all(
         self, frame: np.ndarray
     ) -> Tuple[Optional[FaceLandmarksResult], Optional[FaceLandmarksResult]]:
-        """ตรวจจับทั้งใบหน้าและมือใน 1 รอบ"""
+        """
+        ตรวจจับทั้งใบหน้าและมือใน 1 รอบ
+
+        Returns:
+            (face_result, hand_result) — face_result มี .blendshapes dict
+        """
         mp_image = self._to_mp_image(frame)
 
         face_result = self._face_landmarker.detect(mp_image)
@@ -127,12 +144,12 @@ class FaceDetector:
         hand_lm = None
 
         if face_result.face_landmarks:
-            face_lm = self._wrap_landmarks(face_result.face_landmarks[0])
+            face_lm = self._wrap_face_result(face_result, 0)
             if self.draw_landmarks:
                 self._draw_face_landmarks(frame, face_result.face_landmarks[0])
 
         if hand_result.hand_landmarks:
-            hand_lm = self._wrap_landmarks(hand_result.hand_landmarks[0])
+            hand_lm = FaceLandmarksResult(hand_result.hand_landmarks[0])
             if self.draw_landmarks:
                 self._draw_hand_landmarks(frame, hand_result.hand_landmarks[0])
 
@@ -149,8 +166,23 @@ class FaceDetector:
         return mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
     @staticmethod
+    def _wrap_face_result(result: Any, face_idx: int) -> FaceLandmarksResult:
+        """
+        แปลง FaceLandmarkerResult → FaceLandmarksResult
+        รวม landmarks + blendshapes ไว้ใน object เดียว
+        """
+        landmarks = result.face_landmarks[face_idx]
+
+        blendshapes: dict = {}
+        if result.face_blendshapes and face_idx < len(result.face_blendshapes):
+            for cat in result.face_blendshapes[face_idx]:
+                blendshapes[cat.category_name] = float(cat.score)
+
+        return FaceLandmarksResult(landmarks, blendshapes)
+
+    @staticmethod
     def _wrap_landmarks(landmarks: list) -> FaceLandmarksResult:
-        """Wrap list of NormalizedLandmark เป็น FaceLandmarksResult"""
+        """Wrap landmarks เดี่ยว (ไม่มี blendshapes) — ใช้ใน detect_hands"""
         return FaceLandmarksResult(landmarks)
 
     def _draw_face_landmarks(self, frame: np.ndarray, landmarks: list) -> None:

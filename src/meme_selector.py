@@ -112,8 +112,9 @@ class MemeSelector:
         """
         เลือก path ไฟล์ Meme สำหรับ expression ที่กำหนด
 
-        - ถ้า expression เปลี่ยน → เลือก Meme ใหม่ทันที
-        - ถ้า expression เดิมแต่หมด cooldown → เลือก Meme ใหม่ใน category เดิม
+        - ถ้า expression เปลี่ยน AND cooldown หมด → เลือก Meme ใหม่
+        - ถ้า expression เปลี่ยนแต่ยัง cooldown → แสดง Meme เดิม (ลด flicker)
+        - ถ้า expression เดิมแต่หมด cooldown → เปลี่ยน Meme ใหม่ใน category เดิม
         - ถ้ายังอยู่ใน cooldown → คืน Meme เดิม
 
         Args:
@@ -122,16 +123,24 @@ class MemeSelector:
         Returns:
             str path ของไฟล์ Meme หรือ None ถ้าไม่มีไฟล์
         """
-        now = time.time()
+        now              = time.time()
         expression_changed = expression != self._current_expression
         cooldown_expired   = (now - self._last_change_time) >= self.cooldown_sec
 
-        if expression_changed or cooldown_expired or self._current_meme_path is None:
+        # เปลี่ยน meme ก็ต่อเมื่อ cooldown หมดด้วยเท่านั้น
+        # ถ้า expression สลับแต่ยัง cooldown อยู่ → ถือว่า flicker ไม่เปลี่ยน
+        if (expression_changed and cooldown_expired) or self._current_meme_path is None:
             new_path = self._pick_random(expression)
             if new_path:
-                self._current_expression  = expression
-                self._current_meme_path   = new_path
-                self._last_change_time    = now
+                self._current_expression = expression
+                self._current_meme_path  = new_path
+                self._last_change_time   = now
+        elif not expression_changed and cooldown_expired:
+            # expression เดิม แต่ถึงเวลาสุ่ม meme ใหม่ใน category เดิม
+            new_path = self._pick_random(expression)
+            if new_path:
+                self._current_meme_path = new_path
+                self._last_change_time  = now
 
         return self._current_meme_path
 

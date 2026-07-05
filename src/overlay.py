@@ -1,12 +1,15 @@
 """
 Overlay Module - วางซ้อน Meme ลงบนภาพกล้อง
 รับผิดชอบ: โหลดภาพ Meme, ปรับขนาด, alpha blending (RGBA + RGB)
+รองรับ: PNG, JPG, GIF (animated)
 """
 
 import cv2
 import numpy as np
 import os
-from typing import Optional, Tuple
+import time
+from typing import Optional, Tuple, List
+from PIL import Image
 
 
 class MemeOverlay:
@@ -16,6 +19,7 @@ class MemeOverlay:
     รองรับ:
     - PNG โปร่งใส (RGBA) → alpha blending
     - JPG / RGB → วางทับตรงๆ
+    - GIF animated → เล่น animation แบบ loop โดยใช้ Pillow
     - ตำแหน่ง: top_left, top_right, bottom_left, bottom_right
 
     Args:
@@ -25,11 +29,24 @@ class MemeOverlay:
 
     POSITIONS = ("top_left", "top_right", "bottom_left", "bottom_right")
 
+    # GIF cache entry: list of (bgra_frame, duration_sec)
+    _GifFrames = List[Tuple[np.ndarray, float]]
+
     def __init__(self, cache_images: bool = True, padding: int = 10):
         self.cache_images = cache_images
         self.padding      = padding
+
+        # cache สำหรับภาพนิ่ง: cache_key → np.ndarray หรือ None
         self._cache: dict[str, Optional[np.ndarray]] = {}
-        print("🔲 MemeOverlay เริ่มต้นสำเร็จ")
+
+        # cache สำหรับ GIF: path → list of (frame_bgra, duration_sec)
+        self._gif_cache: dict[str, Optional[List[Tuple[np.ndarray, float]]]] = {}
+
+        # state สำหรับ animation: path → (start_time, size_str)
+        # เก็บเวลาที่เริ่ม loop ของ GIF นั้นๆ
+        self._gif_start: dict[str, float] = {}
+
+        print("🔲 MemeOverlay เริ่มต้นสำเร็จ (รองรับ GIF animation)")
 
     # ------------------------------------------------------------------
     # Public API
@@ -57,7 +74,12 @@ class MemeOverlay:
         if meme_path is None:
             return frame
 
-        meme = self._load_meme(meme_path, size)
+        # แยก GIF ออกจากภาพนิ่ง
+        if meme_path.lower().endswith(".gif"):
+            meme = self._get_gif_frame(meme_path, size)
+        else:
+            meme = self._load_meme(meme_path, size)
+
         if meme is None:
             return frame
 
@@ -73,32 +95,134 @@ class MemeOverlay:
         mh_clipped = min(mh, fh - y)
 
         meme_crop = meme[:mh_clipped, :mw_clipped]
-
-        roi = frame[y:y + mh_clipped, x:x + mw_clipped]
+        roi       = frame[y:y + mh_clipped, x:x + mw_clipped]
 
         if meme.shape[2] == 4:
-            # RGBA → alpha blending
+            # BGRA → alpha blending
             self._blend_rgba(roi, meme_crop)
         else:
-            # RGB → วางทับตรงๆ
+            # BGR → วางทับตรงๆ
             frame[y:y + mh_clipped, x:x + mw_clipped] = meme_crop
 
         return frame
 
     def clear_cache(self) -> None:
-        """ล้าง image cache"""
+        """ล้าง image cache ทั้งหมด"""
         self._cache.clear()
+        self._gif_cache.clear()
+        self._gif_start.clear()
         print("🔄 ล้าง Meme cache แล้ว")
 
     # ------------------------------------------------------------------
-    # Internals
+    # GIF support
+    # ------------------------------------------------------------------
+
+    def _get_gif_frame(
+        self, path: str, size: Tuple[int, int]
+    ) -> Optional[np.ndarray]:
+        """
+        คืน frame ปัจจุบันของ GIF ตาม real-time clock
+
+        GIF แต่ละไฟล์จะ loop อัตโนมัติโดยอ้างอิงเวลาจาก time.monotonic()
+        """
+        cache_key = f"{path}::{size[0]}x{size[1]}"
+
+        # โหลด frames ถ้ายังไม่มีใน cache
+        if cache_key not in self._gif_cache:
+            self._gif_cache[cache_key] = self._load_gif(path, size)
+            self._gif_start[cache_key] = time.monotonic()
+
+        frames = self._gif_cache[cache_key]
+        if not frames:
+            return None
+
+        # GIF มีแค่ 1 frame → คืนเลย ไม่ต้องคำนวณ
+        if len(frames) == 1:
+            return frames[0][0]
+
+        # คำนวณ total duration ของ 1 รอบ
+        total_dur = sum(d for _, d in frames)
+        if total_dur <= 0:
+            return frames[0][0]
+
+        # หา elapsed ภายใน loop ปัจจุบัน
+        elapsed = (time.monotonic() - self._gif_start[cache_key]) % total_dur
+
+        # หา frame ที่ตรงกับเวลา
+        acc = 0.0
+        for frame_img, dur in frames:
+            acc += dur
+            if elapsed < acc:
+                return frame_img
+
+        return frames[-1][0]
+
+    def _load_gif(
+        self, path: str, size: Tuple[int, int]
+    ) -> Optional[List[Tuple[np.ndarray, float]]]:
+        """
+        โหลด GIF ทุก frame ด้วย Pillow แล้วแปลงเป็น BGRA numpy array
+
+        Returns:
+            list of (bgra_ndarray, duration_sec) หรือ None ถ้าโหลดไม่ได้
+        """
+        if not os.path.isfile(path):
+            print(f"   ⚠️  ไม่พบไฟล์ GIF: {path}")
+            return None
+
+        try:
+            pil_gif = Image.open(path)
+        except Exception as e:
+            print(f"   ⚠️  โหลด GIF ไม่ได้ ({path}): {e}")
+            return None
+
+        frames: List[Tuple[np.ndarray, float]] = []
+
+        try:
+            while True:
+                # duration ต่อ frame (ms → sec), default 100ms ถ้าไม่ระบุ
+                dur_ms  = pil_gif.info.get("duration", 100)
+                dur_sec = max(dur_ms, 10) / 1000.0  # ป้องกัน duration = 0
+
+                # แปลงเป็น RGBA เพื่อรักษา transparency
+                rgba = pil_gif.convert("RGBA")
+
+                # resize ด้วย Pillow (LANCZOS คุณภาพดี)
+                rgba = rgba.resize(size, Image.LANCZOS)
+
+                arr = np.array(rgba, dtype=np.uint8)  # (H, W, 4) RGBA
+
+                # แปลง RGBA → BGRA (OpenCV ใช้ BGR)
+                bgra = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGRA)
+
+                frames.append((bgra, dur_sec))
+                pil_gif.seek(pil_gif.tell() + 1)
+
+        except EOFError:
+            pass  # อ่านครบทุก frame แล้ว
+        except Exception as e:
+            print(f"   ⚠️  อ่าน GIF frame ไม่สำเร็จ ({path}): {e}")
+            if not frames:
+                return None
+
+        if not frames:
+            return None
+
+        n = len(frames)
+        total_ms = sum(d * 1000 for _, d in frames)
+        print(f"   🎞️  โหลด GIF สำเร็จ: {os.path.basename(path)} "
+              f"({n} frames, {total_ms:.0f}ms)")
+        return frames
+
+    # ------------------------------------------------------------------
+    # Static image support (PNG / JPG)
     # ------------------------------------------------------------------
 
     def _load_meme(
         self, path: str, size: Tuple[int, int]
     ) -> Optional[np.ndarray]:
         """
-        โหลดและ resize ภาพ Meme
+        โหลดและ resize ภาพนิ่ง (PNG / JPG)
 
         Cache key รวม size เพื่อให้ resize แค่ครั้งเดียวต่อ size
         """
@@ -132,6 +256,10 @@ class MemeOverlay:
 
         return img
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     def _calc_position(
         self,
         position: str,
@@ -159,7 +287,7 @@ class MemeOverlay:
         meme ต้องมี 4 channels (BGRA)
         roi และ meme ต้องมีขนาดเท่ากัน
         """
-        alpha = meme[:, :, 3:4].astype(np.float32) / 255.0  # (H, W, 1)
+        alpha    = meme[:, :, 3:4].astype(np.float32) / 255.0  # (H, W, 1)
         meme_bgr = meme[:, :, :3].astype(np.float32)
         roi_f    = roi.astype(np.float32)
 
@@ -173,19 +301,23 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from src.camera import Camera
 
-    print("🧪 ทดสอบ MemeOverlay")
-    print("วางภาพทดสอบลงใน memes/neutral/ ก่อนรัน")
+    print("🧪 ทดสอบ MemeOverlay (รวม GIF)")
+    print("วางภาพ/GIF ทดสอบลงใน memes/neutral/ ก่อนรัน")
 
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     test_dir = os.path.join(base_dir, "memes", "neutral")
     test_files = [
         os.path.join(test_dir, f)
         for f in os.listdir(test_dir)
-        if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        if f.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
     ] if os.path.isdir(test_dir) else []
 
     camera  = Camera(camera_id=0, width=640, height=480)
     overlay = MemeOverlay()
+
+    print(f"พบไฟล์ทดสอบ: {len(test_files)} ไฟล์")
+    for f in test_files:
+        print(f"  - {os.path.basename(f)}")
 
     print("กด 'Q' เพื่อออก")
     while True:

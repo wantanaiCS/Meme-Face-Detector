@@ -1,10 +1,24 @@
 {
-  "surprised": "surprised",
-  "happy": "happy",
-  "angry": "angry",
-  "sleepy": "sleepy",
-  "thinking": "thinking",
-  "thumbs_up": "thumbs_up",
-  "peace": "peace",
-  "neutral": "neutral"
+  "_comment": "map expression/gesture name → ชื่อโฟลเดอร์ใน memes/",
+
+  "sigma":         "sigma",
+  "laughing":      "laughing",
+  "wink":          "wink",
+  "derp":          "derp",
+  "rage":          "rage",
+  "confused":      "confused",
+  "sad":           "sad",
+  "surprised":     "surprised",
+  "happy":         "happy",
+  "angry":         "angry",
+  "sleepy":        "sleepy",
+  "thinking":      "thinking",
+  "neutral":       "neutral",
+
+  "middle_finger": "middle_finger",
+  "ok_sign":       "ok_sign",
+  "thumbs_up":     "thumbs_up",
+  "peace":         "peace",
+  "pointing":      "neutral",
+  "fist":          "neutral"
 }
